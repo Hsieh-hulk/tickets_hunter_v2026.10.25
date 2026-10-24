@@ -1,0 +1,61 @@
+# IDE files
+/.vscode
+/.idea
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.python-version
+.pytest_cache/
+
+# Sensitive config files
+/src/settings.json
+/src/config_launcher.json
+/src/MAXBOT_LAST_URL.txt
+/src/MAXBOT_INT28_IDLE.txt
+/src/MAXBOT_QUESTION.txt
+/src/heartbeat.txt
+/src/profiles/
+/src/instances/
+src/webdriver/*/data/settings.json
+src/webdriver/*/data/status.json
+
+# Browser data
+chrome_profile/
+user_data/
+
+# WebDriver executables
+/src/webdriver/*.exe
+/src/webdriver/chromedriver*
+/src/webdriver/geckodriver*
+/src/webdriver/msedgedriver*
+
+# Chrome for Testing (auto-downloaded)
+/src/webdriver/chrome-win64/
+/src/webdriver/chrome-linux64/
+/src/webdriver/chrome-mac-*/
+
+# Build output
+/build/
+/dist/
+*.spec.bak
+
+# Logs and temp files
+*.log
+*.tmp
+.history/
+logs.txt
+
+# Environment files
+.env
+.env.*
+
+# macOS metadata
+.DS_Store
+__MACOSX/
+._*
+
+# AI tool configs - may hold API tokens
+.mcp.json

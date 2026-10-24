@@ -1,0 +1,423 @@
+# 平台實作參考：TicketPlus
+
+**文件說明**：TicketPlus 平台的完整實作參考，涵蓋排隊偵測、展開面板設計、實名驗證、多版面自動識別等技術實作指南。
+**最後更新**：2026-10-16
+
+---
+
+## 平台概述
+
+**平台名稱**：TicketPlus (遠大售票)
+**市場地位**：台灣中型票務平台
+**主要業務**：演唱會、展覽、運動賽事
+**完成度**：85% ✅
+**難度級別**：⭐⭐⭐ (高)
+
+---
+
+## 平台特性
+
+### 核心特點
+✅ **優勢**：
+- Vue.js SPA 架構，DOM 結構相對穩定
+- 支援多種版面自動識別
+- 完整的排隊偵測機制
+- 支援折扣碼輸入
+
+⚠️ **挑戰**：
+- 多種版面型別（Style 1/2/3）
+- 展開面板（Accordion）設計
+- 實名驗證需求
+- 排隊機制需要等待
+
+### 特殊機制
+
+1. **排隊偵測**（核心功能）
+   - 自動偵測排隊狀態關鍵字
+   - 偵測到排隊時暫停操作
+   - 等待排隊結束後繼續
+
+   | 排隊關鍵字 | 說明 |
+   |-----------|------|
+   | `排隊購票中` | 進入排隊狀態 |
+   | `請稍候` | 系統處理中 |
+   | `請別離開頁面` | 排隊進行中 |
+   | `請勿離開` | 排隊進行中 |
+   | `請勿關閉網頁` | 排隊進行中 |
+   | `同時使用多個裝置` | 多裝置警告 |
+   | `視窗購票` | 排隊視窗提示 |
+   | `正在處理` | 系統處理中 |
+   | `處理中` | 系統處理中 |
+
+2. **多版面自動識別**
+   - Style 1: 標準版面（v-expansion-panels）
+   - Style 2: 簡化版面（直接按鈕）
+   - Style 3: 新版面（v-card 結構）
+   - 自動偵測並套用對應選擇器
+
+3. **展開面板**（Accordion）
+   - 票區需要先點擊展開
+   - 展開後才能選擇票數
+   - 支援關鍵字比對展開
+
+4. **實名驗證對話方塊**
+   - 自動偵測並關閉實名驗證提示
+   - 自動處理「其他活動推薦」對話方塊
+   - 自動處理「訂單失敗」對話方塊
+
+---
+
+## 核心函式索引
+
+| 階段 | 函式名稱 | 說明 |
+|------|---------|------|
+| Main | `nodriver_ticketplus_main()` | 主控制流程（URL 路由）|
+| Stage 2 | `nodriver_ticketplus_account_sign_in()` | 帳號登入 |
+| Stage 2 | `nodriver_ticketplus_account_auto_fill()` | 自動填入帳密 |
+| Stage 3 | `nodriver_ticketplus_detect_layout_style()` | 版面型別偵測 |
+| Stage 4 | `nodriver_ticketplus_date_auto_select()` | 日期自動選擇 |
+| Stage 5 + 6 | `nodriver_ticketplus_unified_select()` | 展開式面板，區域與票數在同一頁完成，合併為單一函式 |
+| Stage 9 | `nodriver_ticketplus_ticket_agree()` | 同意條款 |
+| Stage 10 | `nodriver_ticketplus_click_next_button_unified()` | 下一步按鈕 |
+| Stage 11 | `nodriver_ticketplus_check_queue_status()` | **排隊狀態偵測** |
+| Stage 10 | `nodriver_ticketplus_confirm()` | 訂單送出（字尾為 `_confirm`，非規範的 `_confirm_order`）|
+| Util | `nodriver_ticketplus_accept_realname_card()` | 關閉實名驗證對話方塊 |
+| Util | `nodriver_ticketplus_accept_other_activity()` | 關閉推薦活動對話方塊 |
+| Util | `nodriver_ticketplus_accept_order_fail()` | 處理訂單失敗對話方塊 |
+| Util | `nodriver_ticketplus_order_exclusive_code()` | 優惠序號與信用卡前碼填入（依頁面要求取前 N 碼） |
+| Util | `nodriver_ticketplus_check_next_button()` | 下一步按鈕狀態檢查 |
+
+**程式碼位置**：`src/platforms/ticketplus.py`
+
+---
+
+## 特殊設計 1: 排隊狀態偵測
+
+### 挑戰
+
+TicketPlus 在高流量時會進入排隊狀態，此時：
+- 頁面顯示排隊訊息
+- 可能有 overlay 遮罩層
+- 需要等待而非重複操作
+
+### 解決方案
+
+**核心程式碼**（`nodriver_ticketplus_check_queue_status`）:
+
+> 以下片段是早期版本，僅供說明思路。實作已因 issue #389 改寫：改用 `innerText`
+> 避免抓到 Vuetify 常駐掛載的隱藏節點、只採計可見的對話方塊、遮罩層不再參與判定，
+> 並在偵測到失敗彈出視窗時強制判為「非排隊」。以原始碼為準。
+
+```python
+async def nodriver_ticketplus_check_queue_status(tab, config_dict, force_show_debug=False):
+    """檢查排隊狀態 - 優化版，避免重複輸出"""
+
+    result = await tab.evaluate('''
+        (function() {
+            // 檢查排隊中的關鍵字
+            const queueKeywords = [
+                '排隊購票中',
+                '請稍候',
+                '請別離開頁面',
+                '請勿離開',
+                '請勿關閉網頁',
+                '同時使用多個裝置',
+                '視窗購票',
+                '正在處理',
+                '處理中'
+            ];
+
+            const bodyText = document.body.textContent || '';
+
+            // 檢查是否包含任何排隊關鍵字
+            const hasQueueKeyword = queueKeywords.some(keyword => bodyText.includes(keyword));
+
+            // 檢查是否有遮罩層（排隊中的視覺指示）
+            const overlayScrim = document.querySelector('.v-overlay__scrim');
+            const hasOverlay = overlayScrim &&
+                (overlayScrim.style.opacity === '1' ||
+                 overlayScrim.style.display !== 'none');
+
+            // 檢查對話框中的排隊訊息
+            const dialogText = document.querySelector('.v-dialog')?.textContent || '';
+            const hasQueueDialog = dialogText.includes('排隊') ||
+                                   dialogText.includes('請稍候');
+
+            return {
+                inQueue: hasQueueKeyword || hasOverlay || hasQueueDialog,
+                foundKeywords: queueKeywords.filter(keyword => bodyText.includes(keyword)),
+                hasOverlay: hasOverlay,
+                hasQueueDialog: hasQueueDialog
+            };
+        })();
+    ''')
+
+    return result.get('inQueue', False)
+```
+
+**排隊監控邏輯**：
+```python
+# 進入排隊監控循環，每 5 秒檢查一次
+while True:
+    is_still_in_queue = await nodriver_ticketplus_check_queue_status(tab, config_dict)
+
+    if not is_still_in_queue:
+        # 排隊結束，繼續處理
+        debug.log("[QUEUE END] Queue ended, continuing page processing")
+        break
+
+    await asyncio.sleep(5)  # 每 5 秒檢查一次
+```
+
+---
+
+## 特殊設計 2: 多版面自動識別
+
+### 挑戰
+
+TicketPlus 有多種頁面版面，選擇器不同：
+- **Style 1**: 使用 `v-expansion-panels` 展開面板
+- **Style 2**: 直接按鈕式選擇
+- **Style 3**: 使用 `v-card` 卡片結構
+
+### 解決方案
+
+**核心程式碼**（`nodriver_ticketplus_detect_layout_style`）:
+
+```python
+async def nodriver_ticketplus_detect_layout_style(tab, config_dict=None):
+    """自動偵測 TicketPlus 頁面版面類型"""
+
+    result = await tab.evaluate('''
+        (function() {
+            // Style 1: v-expansion-panels (標準展開面板)
+            if (document.querySelector('.v-expansion-panels')) {
+                return { style: 1, selector: '.v-expansion-panels' };
+            }
+
+            // Style 2: 直接按鈕
+            if (document.querySelector('.ticket-area-btn')) {
+                return { style: 2, selector: '.ticket-area-btn' };
+            }
+
+            // Style 3: v-card 結構
+            if (document.querySelector('.v-card.ticket-card')) {
+                return { style: 3, selector: '.v-card.ticket-card' };
+            }
+
+            return { style: 0, selector: null };
+        })();
+    ''')
+
+    return result.get('style', 0)
+```
+
+---
+
+## 特殊設計 3: 展開面板區域選擇
+
+### 流程
+
+1. **偵測展開面板**：尋找 `.v-expansion-panel-header`
+2. **關鍵字比對**：比對票區名稱
+3. **點擊展開**：展開目標票區
+4. **等待動畫**：等待展開動畫完成
+5. **設定票數**：在展開的面板中設定票數
+
+### 核心程式碼片段
+
+```python
+# 展開面板選擇器
+panel_headers = await tab.query_selector_all('.v-expansion-panel-header')
+
+for header in panel_headers:
+    header_text = await header.text
+
+    # 關鍵字匹配
+    if area_keyword in header_text:
+        # 檢查是否已展開
+        is_expanded = 'v-expansion-panel--active' in await header.get_attribute('class')
+
+        if not is_expanded:
+            await header.click()
+            await asyncio.sleep(0.5)  # 等待展開動畫
+
+        # 在展開的面板中設定票數
+        panel_content = await header.query_selector('~ .v-expansion-panel-content')
+        ticket_input = await panel_content.query_selector('input[type="number"]')
+
+        if ticket_input:
+            await ticket_input.clear()
+            await ticket_input.send_keys(str(ticket_number))
+```
+
+---
+
+## URL 路由表
+
+| URL 模式 | 頁面型別 | 處理函式 |
+|---------|---------|---------|
+| `ticketplus.com.tw/` | 首頁 | 自動登入填入 |
+| `/activity/{id}` | 活動頁面 | 日期選擇 |
+| `/order/{id}/{session}` | 訂單頁面 | 區域+票數選擇 |
+| `/confirm/{id}/{session}` | 確認頁面 | 確認訂單 |
+| `/confirmseat/{id}/{session}` | 座位確認 | 確認座位 |
+
+---
+
+## 配置範例
+
+```json
+{
+  "homepage": "https://ticketplus.com.tw/activity/xxx",
+  "webdriver_type": "nodriver",
+  "ticket_account": {
+    "ticketplus": {
+      "email": "your@email.com",
+      "password": "your_password"
+    }
+  },
+  "date_auto_select": {
+    "enable": true,
+    "date_keyword": "12/25",
+    "mode": "random"
+  },
+  "area_auto_select": {
+    "enable": true,
+    "area_keyword": "\"VIP區\",\"搖滾區\",\"一般區\"",
+    "mode": "random"
+  },
+  "ticket_number": 2,
+  "advanced": {
+    "verbose": true,
+    "auto_reload_page_interval": 3
+  }
+}
+```
+
+---
+
+## 常見問題與解決方案
+
+### Q1: 為什麼一直卡在排隊？
+
+**A**: 這是正常現象，程式會自動等待排隊結束。
+
+**檢查項目**：
+- 檢視記錄是否顯示 `[QUEUE] Queue status detected`
+- 確認網路連線穩定
+- 排隊時間視活動熱門程度而定
+
+### Q2: 展開面板無法點擊？
+
+**A**: 可能是版面型別偵測錯誤。
+
+**解決方案**：
+1. 啟用 `verbose` 模式檢視偵測結果
+2. 檢查 `layout_style` 輸出
+3. 手動確認頁面結構是否符合預期
+
+### Q3: 優惠序號或卡號前碼沒有被填入？
+
+**A**: 兩種欄位讀不同的設定鍵，先確認填的是對的那個。
+
+```json
+{
+  "advanced": {
+    "discount_code": "YOUR_CODE"
+  },
+  "contact": {
+    "credit_card_prefix": "412345"
+  }
+}
+```
+
+`.exclusive-code` 容器在票數選定後才由 Vue 掛載，同一個容器可能是加購序號欄，
+也可能是卡友專區的信用卡驗證欄，靠標籤文字與 placeholder 分辨：
+
+| 用字 | 填入 |
+|------|------|
+| placeholder 為「答案選項」 | **不填**（問答題，要的是答案不是代碼）|
+| 序號、加購 | `discount_code`（優先於卡片用字，「信用卡優惠序號」算序號欄）|
+| 信用卡、卡號、卡友、中國信託、簽帳金融卡、前六碼、前八碼 | `credit_card_prefix` |
+| 優惠、折扣、專屬代碼、會員 | `discount_code`（「專屬代碼」是遠大預設標題）|
+| 以上皆無 | 只設了 `discount_code` 時填入；兩者都設或只設卡號前碼時**不填** |
+
+`.exclusive-code` 一張訂單只有一個，且是必填：空著就無法送出（#434）。
+所以字樣不認得、而設定裡只有優惠代碼一個候選值時，直接填入。卡號前碼與 ibon
+共用，常是順便帶著的，不往不認得的欄位填。不填時 debug log 會印出標籤與
+placeholder，回報後即可擴充關鍵字。
+
+卡號前碼的長度由購票頁決定：設定可填最多 8 碼，程式從欄位標籤／placeholder 讀「前 N 碼」
+（`util.extract_card_prefix_length`），讀不到才用 input `maxlength`（4～8 才採用），再以
+`util.fit_card_prefix` 取前 N 碼。設定的碼數不足 N、或讀不到 N 且設定超過 6 碼時不填，
+debug log 會印出標籤、placeholder、maxlength 與判斷出的 N（不印卡號）。
+注意：欄位文字可能沒隨階段更新（米津玄師活動頁寫鼎鑽階段前 8 碼、全卡友階段前 6 碼，
+但購票頁標題兩場都寫「卡號前6碼」），以購票頁實際文字為準。
+
+另一道保護：欄位已有值就不覆寫（平台可能預填）；截取後仍超過欄位 `maxlength` 也不填。
+
+---
+
+## 代碼框出現條件與場次掃描
+
+購票頁的代碼框由遠大前端依場次設定決定，不登入就能從公開 API 查到：
+
+| 條件 | 來源 |
+|------|------|
+| 場次 `transactionValidType` 有值（實測為 `sk00000523` 這類 key，不是 `"serial"`） | `config/api/v1/get?eventId=…&sessionId=…` → `result.session[]` |
+| 選到的票種帶 `serialKey` | 購票頁商品資料（需登入，未實測） |
+| 標題：`SNDescription[serialKey].tw.title`；為空時顯示預設「請輸入專屬代碼」 | 同場次資料 |
+
+掃描流程（Chrome DevTools MCP 在 ticketplus.com.tw 頁面內執行即可，同源 CORS）：
+
+1. `apis.ticketplus.com.tw/config/api/v1/getS3?path=main/mainEvents.json` → `allEventId`（32 碼 hex）
+2. 每個活動 `getS3?path=event/<hex>/sessions.json` → 場次 hex ID
+3. hex ID 需解密成 `e000001555`／`s000002310` 格式才能查 `config/api/v1/get`：
+   AES-128-CBC，key 與 iv 寫在前端 `app.*.js` 的 webpack 模組 `9263`（版本更新可能變動，以前端為準）
+4. `config/api/v1/get?eventId=<e…>&sessionId=<s…,s…>` → 篩 `transactionValidType` 非空的場次
+
+2026-10-15 實測：85 個活動、136 場，帶序號的 6 場標題都含「序號」（加購序號、限定特別活動序號），
+沒有 `SNDescription` 為空、會顯示「專屬代碼」預設標題的場次。
+
+---
+
+## 選擇器快速參考
+
+| 功能 | 選擇器 | 備註 |
+|------|--------|------|
+| 日期按鈕 | `.session-btn`, `.date-btn` | 依版面型別 |
+| 展開面板 | `.v-expansion-panel-header` | Style 1 |
+| 票數輸入 | `input[type="number"]` | 在面板內 |
+| 下一步按鈕 | `.v-btn.primary`, `button[type="submit"]` | 多種選擇器 |
+| 排隊遮罩 | `.v-overlay__scrim` | 偵測排隊 |
+| 對話方塊 | `.v-dialog` | 各種提示 |
+
+---
+
+## 相關文件
+
+- 📋 [Stage 11: 排隊與付款機制](../../03-mechanisms/11-queue-payment.md) - 排隊偵測詳解
+- 📋 [Stage 5: 區域選擇機制](../../03-mechanisms/05-area-selection.md) - 展開面板處理
+- 🏗️ [程式碼結構分析](../../02-development/structure.md) - TicketPlus 函式索引
+- 📖 [12-Stage 標準](../../02-development/ticket_automation_standard.md) - 完整流程規範
+
+---
+
+## 版本歷史
+
+| 版本 | 日期 | 變更內容 |
+|------|------|---------|
+| v1.0 | 2024 | 初版：基本功能支援 |
+| v1.1 | 2025-08 | 多版面自動識別 |
+| v1.2 | 2025-10 | 展開面板最佳化 |
+| **v1.3** | **2025-11** | **排隊偵測機制完善** |
+| **v1.4** | **2025-12** | **折扣碼支援 + 文件更新** |
+| v1.5 | 2026-10 | 代碼框補預設標題、會員字樣、問答框與保底填入（#434）；記錄代碼框出現條件與場次掃描 |
+
+**v1.4 亮點**：
+- ✅ 完整的排隊偵測機制（9 個關鍵字 + overlay 偵測）
+- ✅ 多版面自動識別（Style 1/2/3）
+- ✅ 展開面板關鍵字比對
+- ✅ 折扣碼自動輸入
+- ✅ 實名驗證對話方塊自動處理
